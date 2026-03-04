@@ -12,7 +12,7 @@ This document outlines the architecture for an LLM-based customer service assist
 |-----------|------------|---------------|
 | **Backend** | Python + FastAPI | Async support, excellent ML ecosystem, OpenAPI docs |
 | **Frontend** | React + Vite + TypeScript | Fast dev experience, type safety, modern tooling |
-| **Vector DB** | zvec (Alibaba) | Lightweight, in-process, blazing fast, no external service |
+| **Vector DB** | ChromaDB | Persistent vector store, easy setup, good Python integration |
 | **LLM** | Phi-3 Mini 3.8B | Best quality/size ratio at ≤6B params, good fine-tuning support |
 | **Inference** | Ollama | Simple local deployment, model management, easy API |
 | **Embeddings** | all-MiniLM-L6-v2 | 384 dims, fast, good quality, ~80MB |
@@ -67,7 +67,7 @@ This document outlines the architecture for an LLM-based customer service assist
            │                        │                        │
            ▼                        ▼                        ▼
 ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│     zvec         │    │     Ollama       │    │   File Storage   │
+│     ChromaDB         │    │     Ollama       │    │   File Storage   │
 │  Vector Store    │    │   (Phi-3 Mini)   │    │   (Documents)    │
 │  (Embeddings)    │    │                  │    │                  │
 └──────────────────┘    └──────────────────┘    └──────────────────┘
@@ -109,7 +109,7 @@ llm/
 │   │   │   └── domain.py           # Domain models
 │   │   └── data/
 │   │       ├── __init__.py
-│   │       ├── vectorstore.py      # zvec wrapper
+│   │       ├── vectorstore.py      # ChromaDB wrapper
 │   │       └── preprocessing.py    # Data cleaning/anonymization
 │   ├── scripts/
 │   │   ├── ingest_data.py          # Initial data ingestion
@@ -149,7 +149,7 @@ llm/
 │   ├── qa.json
 │   └── NUST Bank-Product-Knowledge.xlsx
 ├── data/
-│   └── zvec_store/                 # zvec database files
+│   └── chroma_store/                 # ChromaDB database files
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -185,40 +185,47 @@ def preprocess_text(text: str) -> str
 
 ---
 
-### 2. Vector Store (zvec)
+### 2. Vector Store (ChromaDB)
 
 **Location:** `backend/app/data/vectorstore.py`
 
-**zvec Integration:**
+**ChromaDB Integration:**
 ```python
-import zvec
+import chromadb
+from chromadb.config import Settings
+
 
 class VectorStore:
     def __init__(self, path: str, dimension: int = 384):
-        schema = zvec.CollectionSchema(
-            name="bank_documents",
-            vectors=zvec.VectorSchema("embedding", zvec.DataType.VECTOR_FP32, dimension),
+        self._client = chromadb.PersistentClient(
+            path=path,
+            settings=Settings(anonymized_telemetry=False),
         )
-        self.collection = zvec.create_and_open(path=path, schema=schema)
+        self._collection = self._client.get_or_create_collection(
+            name="bank_documents",
+            metadata={"hnsw:space": "cosine"},
+        )
     
     def add_document(self, doc_id: str, text: str, embedding: list[float], metadata: dict):
-        self.collection.insert([
-            zvec.Doc(
-                id=doc_id,
-                vectors={"embedding": embedding},
-                fields={"text": text, **metadata}
-            )
-        ])
+        clean_metadata = {k: str(v) for k, v in metadata.items()}
+        self._collection.upsert(
+            ids=[doc_id],
+            embeddings=[embedding],
+            documents=[text],
+            metadatas=[clean_metadata],
+        )
     
     def search(self, query_embedding: list[float], top_k: int = 5) -> list[SearchResult]:
-        results = self.collection.query(
-            zvec.VectorQuery("embedding", vector=query_embedding),
-            topk=top_k
+        results = self._collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
         )
-        return results
+        # Convert to SearchResult objects
+        ...
     
     def delete(self, doc_id: str):
-        self.collection.delete(doc_id)
+        self._collection.delete(ids=[doc_id])
 ```
 
 ---
@@ -482,7 +489,7 @@ class HealthResponse(BaseModel):
                                           │                   │
                                     ┌─────────────┐    ┌──────────────┐
                                     │ Ollama      │    │ Vector       │
-                                    │ (Phi-3)     │    │ Search (zvec)│
+                                    │ (Phi-3)     │    │ Search (ChromaDB)│
                                     └─────────────┘    └──────────────┘
 ```
 
@@ -497,7 +504,7 @@ class HealthResponse(BaseModel):
                                                               ▼
 ┌──────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐
 │  Ready   │◀───│ Store in     │◀───│ Generate    │◀───│ Chunk        │
-│  to Query│    │ zvec         │    │ Embeddings  │    │ Text         │
+│  to Query│    │ ChromaDB         │    │ Embeddings  │    │ Text         │
 └──────────┘    └──────────────┘    └─────────────┘    └──────────────┘
 ```
 
@@ -588,7 +595,7 @@ services:
       - "8000:8000"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
-      - ZVEC_PATH=/app/data/zvec_store
+      - CHROMA_PATH=/app/data/chroma_store
       - LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -622,7 +629,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=phi3:mini
 
 # Vector Store
-ZVEC_PATH=./data/zvec_store
+CHROMA_PATH=./data/chroma_store
 
 # Embedding Model
 EMBEDDING_MODEL=all-MiniLM-L6-v2
@@ -651,7 +658,7 @@ RATE_LIMIT_PER_MINUTE=60
 - [ ] Build data ingestion (JSON/CSV/XLSX)
 - [ ] Implement PII anonymization
 - [ ] Create text chunking logic
-- [ ] Integrate zvec vector store
+- [ ] Integrate ChromaDB vector store
 - [ ] Build embedding service
 
 ### Phase 3: RAG System
@@ -708,7 +715,7 @@ pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
 
 # Vector Store & Embeddings
-zvec>=0.2.0
+chromadb>=0.4.0
 sentence-transformers>=2.5.0
 
 # Data Processing
@@ -763,7 +770,7 @@ httpx>=0.27.0
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
-| zvec compatibility issues | Low | High | Fallback to ChromaDB (similar API) |
+| ChromaDB compatibility issues | Low | Low | N/A (using ChromaDB) |
 | Phi-3 quality insufficient | Medium | Medium | Switch to Llama 3.2 3B or Qwen 2.5 |
 | LoRA fine-tuning fails | Medium | Low | Use strong prompt engineering only |
 | Ollama latency issues | Medium | Medium | Enable GPU, reduce context window |

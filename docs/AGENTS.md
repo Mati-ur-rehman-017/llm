@@ -2,7 +2,7 @@
 
 ## Project Context
 
-This is an LLM-based customer service assistant for NUST Bank. The system uses RAG (Retrieval-Augmented Generation) with Phi-3 Mini 3.8B, zvec vector database, and strict safety guardrails.
+This is an LLM-based customer service assistant for NUST Bank. The system uses RAG (Retrieval-Augmented Generation) with Phi-3 Mini 3.8B, ChromaDB vector database, and strict safety guardrails.
 
 **Key Documents:**
 - `Docs/requirements.md` - Project requirements and grading criteria
@@ -37,7 +37,7 @@ This is an LLM-based customer service assistant for NUST Bank. The system uses R
 |-----------|------------|-------|
 | Backend | Python + FastAPI | Async required |
 | Frontend | React + Vite + TypeScript | No other frameworks |
-| Vector DB | zvec (Alibaba) | `pip install zvec` |
+| Vector DB | ChromaDB | `pip install chromadb` |
 | LLM | Phi-3 Mini 3.8B | Via Ollama |
 | Inference | Ollama | Local deployment |
 | Embeddings | all-MiniLM-L6-v2 | 384 dimensions |
@@ -61,7 +61,7 @@ llm/
 │   ├── services/         # API client
 │   └── types/            # TypeScript types
 ├── Docs/                 # Documentation only
-└── data/                 # Runtime data (zvec store, uploads)
+└── data/                 # Runtime data (ChromaDB store, uploads)
 ```
 
 **Rules:**
@@ -84,7 +84,7 @@ Work on phases in order. Do not skip ahead.
 
 ### Phase 2: Data Pipeline
 6. Create `backend/app/data/preprocessing.py` - data ingestion
-7. Create `backend/app/data/vectorstore.py` - zvec wrapper
+7. Create `backend/app/data/vectorstore.py` - ChromaDB wrapper
 8. Create `backend/app/services/embedding.py` - embedding service
 9. Create `backend/scripts/ingest_data.py` - initial data load
 
@@ -130,7 +130,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     ollama_base_url: str
     ollama_model: str
-    zvec_path: str
+    chroma_path: str
     embedding_model: str
     
     class Config:
@@ -192,29 +192,37 @@ async def chat(message: str) -> str:
 
 ---
 
-## zvec Usage
+## ChromaDB Usage
 
 ```python
-import zvec
+import chromadb
+from chromadb.config import Settings
 
-# Schema definition
-schema = zvec.CollectionSchema(
-    name="bank_documents",
-    vectors=zvec.VectorSchema("embedding", zvec.DataType.VECTOR_FP32, 384),
+# Create persistent client
+client = chromadb.PersistentClient(
+    path="./data/chroma_store",
+    settings=Settings(anonymized_telemetry=False)
 )
 
-# Create/open collection
-collection = zvec.create_and_open(path="./data/zvec_store", schema=schema)
+# Get or create collection
+collection = client.get_or_create_collection(
+    name="bank_documents",
+    metadata={"hnsw:space": "cosine"}
+)
 
-# Insert
-collection.insert([
-    zvec.Doc(id="doc_1", vectors={"embedding": [0.1, ...]}),
-])
+# Add documents
+collection.upsert(
+    ids=["doc_1"],
+    embeddings=[[0.1] * 384],
+    documents=["Sample document text"],
+    metadatas=[{"source": "test"}]
+)
 
 # Query
 results = collection.query(
-    zvec.VectorQuery("embedding", vector=[0.1, ...]),
-    topk=5
+    query_embeddings=[[0.1] * 384],
+    n_results=5,
+    include=["documents", "metadatas", "distances"]
 )
 ```
 
@@ -227,7 +235,7 @@ Required variables (must be set, no defaults):
 ```bash
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=phi3:mini
-ZVEC_PATH=./data/zvec_store
+CHROMA_PATH=./data/chroma_store
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 API_HOST=0.0.0.0
 API_PORT=8000
