@@ -36,6 +36,16 @@ services:
       timeout: 10s
       retries: 3
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nust-bank-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+
 volumes:
   ollama_data:
   hf_cache:
