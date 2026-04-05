@@ -6,11 +6,13 @@ import { InputBar } from "./components/Chat/InputBar";
 import { UploadForm } from "./components/Documents/UploadForm";
 import { DocumentList } from "./components/Documents/DocumentList";
 import { useChat } from "./hooks/useChat";
+import { useDocuments } from "./hooks/useDocuments";
 import type { ActiveTab } from "./types";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("chat");
   const { messages, isStreaming, sendMessage, stopStreaming } = useChat();
+  const { documents, isLoading, upload, remove } = useDocuments();
 
   return (
     <div className="flex h-screen flex-col bg-[#343541] text-[#ececf1]">
@@ -38,8 +40,12 @@ export default function App() {
                 <h2 className="text-lg font-semibold text-[#ececf1]">
                   Document Management
                 </h2>
-                <UploadForm />
-                <DocumentList />
+                <UploadForm onUpload={upload} isLoading={isLoading} />
+                <DocumentList
+                  documents={documents}
+                  onDelete={remove}
+                  isLoading={isLoading}
+                />
               </div>
             </div>
           )}

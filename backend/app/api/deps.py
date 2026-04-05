@@ -8,6 +8,7 @@ from functools import lru_cache
 from app.config import settings
 from app.data.vectorstore import VectorStore
 from app.services.chat import ChatService
+from app.services.document import DocumentService
 from app.services.embedding import EmbeddingService
 from app.services.llm import LLMService
 from app.services.retrieval import RetrievalService
@@ -63,4 +64,14 @@ def get_chat_service() -> ChatService:
     return ChatService(
         retrieval_service=get_retrieval_service(),
         llm_service=get_llm_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_document_service() -> DocumentService:
+    """Return a singleton DocumentService for document management."""
+
+    return DocumentService(
+        vector_store=get_vector_store(),
+        embedding_service=get_embedding_service(),
     )

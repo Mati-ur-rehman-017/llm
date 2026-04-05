@@ -25,8 +25,27 @@ export interface MessageHistoryItem {
 export interface Document {
   id: string;
   filename: string;
-  status: string;
+  status: "indexed" | "processing" | "failed";
   indexed_at: string;
+  chunk_count: number;
+  metadata: Record<string, string>;
+}
+
+export interface DocumentUploadResponse {
+  id: string;
+  status: "success" | "error";
+  message: string;
+  chunks_created: number;
+}
+
+export interface DocumentListResponse {
+  documents: Document[];
+  total: number;
+}
+
+export interface DocumentDeleteResponse {
+  status: "success" | "error";
+  message: string;
 }
 
 export type ActiveTab = "chat" | "documents";

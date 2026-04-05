@@ -1,4 +1,10 @@
-import type { ChatResponse, MessageHistoryItem } from "../types";
+import type {
+  ChatResponse,
+  DocumentDeleteResponse,
+  DocumentListResponse,
+  DocumentUploadResponse,
+  MessageHistoryItem,
+} from "../types";
 
 const API_BASE = "/api";
 
@@ -88,4 +94,49 @@ export async function healthCheck(): Promise<{ status: string }> {
   const response = await fetch(`${API_BASE}/health/`);
   if (!response.ok) throw new Error("Health check failed");
   return response.json() as Promise<{ status: string }>;
+}
+
+// Document API functions
+
+export async function listDocuments(): Promise<DocumentListResponse> {
+  const response = await fetch(`${API_BASE}/documents/`);
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to list documents: ${error}`);
+  }
+  return response.json() as Promise<DocumentListResponse>;
+}
+
+export async function uploadDocument(
+  file: File,
+): Promise<DocumentUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/documents/`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to upload document: ${error}`);
+  }
+
+  return response.json() as Promise<DocumentUploadResponse>;
+}
+
+export async function deleteDocument(
+  docId: string,
+): Promise<DocumentDeleteResponse> {
+  const response = await fetch(`${API_BASE}/documents/${docId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to delete document: ${error}`);
+  }
+
+  return response.json() as Promise<DocumentDeleteResponse>;
 }
