@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Iterable
 
@@ -12,7 +13,11 @@ _BACKEND_ROOT = _SCRIPT_DIR.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from app.data.preprocessing import Document, chunk_document, load_documents_from_path
+from app.data.preprocessing import (
+    Document,
+    chunk_document_smart,
+    load_documents_from_path,
+)
 
 ALLOWED_EXTENSIONS = {".json", ".csv", ".xlsx", ".xls", ".txt"}
 
@@ -44,6 +49,43 @@ def _collect_documents(
     return documents
 
 
+def _index_documents(
+    documents: Iterable[Document],
+    *,
+    embedding_service,
+    vector_store,
+) -> dict[str, int]:
+    counts = {
+        "documents": 0,
+        "chunks": 0,
+        "faq_chunks": 0,
+        "non_faq_chunks": 0,
+    }
+
+    for doc in documents:
+        counts["documents"] += 1
+        chunks = list(chunk_document_smart(doc))
+        if not chunks:
+            continue
+
+        embeddings = embedding_service.embed_batch([chunk.text for chunk in chunks])
+        for chunk, embedding in zip(chunks, embeddings):
+            vector_store.add_document(
+                doc_id=chunk.id,
+                text=chunk.text,
+                embedding=embedding,
+                metadata=chunk.metadata,
+            )
+            counts["chunks"] += 1
+            is_faq = str(chunk.metadata.get("is_faq", "false")).lower() == "true"
+            if is_faq:
+                counts["faq_chunks"] += 1
+            else:
+                counts["non_faq_chunks"] += 1
+
+    return counts
+
+
 def main() -> None:
     from app.config import settings
     from app.data.vectorstore import VectorStore
@@ -53,17 +95,16 @@ def main() -> None:
     documents = _collect_documents(document_roots)
     embedding_service = EmbeddingService(model_name=settings.embedding_model)
     vector_store = VectorStore(str(settings.chroma_path))
+    counts = _index_documents(
+        documents,
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+    )
 
-    for doc in documents:
-        chunks = list(chunk_document(doc))
-        embeddings = embedding_service.embed_batch([chunk.text for chunk in chunks])
-        for chunk, embedding in zip(chunks, embeddings):
-            vector_store.add_document(
-                doc_id=chunk.id,
-                text=chunk.text,
-                embedding=embedding,
-                metadata=chunk.metadata,
-            )
+    print(
+        "Indexed {documents} docs into {chunks} chunks "
+        "(faq={faq_chunks}, non_faq={non_faq_chunks})".format(**counts)
+    )
 
 
 if __name__ == "__main__":
