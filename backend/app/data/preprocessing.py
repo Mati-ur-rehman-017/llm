@@ -14,6 +14,9 @@ import numpy as np
 
 WORD_CHUNK_SIZE = 800
 WORD_CHUNK_OVERLAP = 200
+QA_CHUNK_SIZE = 900
+QA_CHUNK_OVERLAP = 140
+SEMANTIC_DOC_HARD_CAP = 2400
 
 # Patterns for detecting Q&A content in product sheets
 QA_QUESTION_PATTERNS = [
@@ -106,7 +109,11 @@ def _load_from_json(path: Path) -> list[Document]:
                 Document(
                     id=doc_id,
                     text=text,
-                    metadata={"source": path.name, "category": cat_name},
+                    metadata={
+                        "source": path.name,
+                        "category": cat_name,
+                        "type": "qa",
+                    },
                 )
             )
     return documents
@@ -584,6 +591,162 @@ def preprocess_text(text: str) -> str:
     normalized = text.strip()
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized.lower()
+
+
+def normalize_text_for_embedding(text: str) -> str:
+    """Normalize text while preserving core formatting and casing."""
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
+def _extract_qa_parts(text: str) -> tuple[str, str]:
+    question_match = re.search(r"(?:^|\n)Q:\s*(.+?)(?:\n|$)", text, flags=re.IGNORECASE)
+    answer_match = re.search(
+        r"(?:^|\n)A:\s*(.*)$", text, flags=re.IGNORECASE | re.DOTALL
+    )
+
+    question = question_match.group(1).strip() if question_match else ""
+    answer = answer_match.group(1).strip() if answer_match else ""
+
+    if not question and _is_question(text):
+        first_line = normalize_text_for_embedding(text).split("\n", maxsplit=1)[0]
+        question = first_line
+    return question, answer
+
+
+def _enrich_metadata(
+    document: Document,
+    *,
+    chunk_index: int,
+    is_faq: bool,
+    doc_kind: str,
+    question: str = "",
+) -> dict[str, str | int]:
+    metadata: dict[str, str | int] = {
+        "source": document.metadata.get("source", ""),
+        "chunk_index": chunk_index,
+        "is_faq": "true" if is_faq else "false",
+        "doc_kind": doc_kind,
+    }
+    metadata.update(document.metadata)
+    if question:
+        metadata["question"] = question[:180]
+    return metadata
+
+
+def chunk_document_smart(
+    document: Document,
+    *,
+    chunk_size: int = WORD_CHUNK_SIZE,
+    overlap: int = WORD_CHUNK_OVERLAP,
+    qa_chunk_size: int = QA_CHUNK_SIZE,
+    qa_overlap: int = QA_CHUNK_OVERLAP,
+) -> list[DocumentChunk]:
+    """Apply metadata-aware chunking with FAQ-first behavior."""
+
+    doc_type = document.metadata.get("type", "").lower()
+
+    if doc_type == "qa":
+        question, answer = _extract_qa_parts(document.text)
+        question_prefix = f"Q: {question}" if question else ""
+        answer_prefix = "A: "
+        full_text = normalize_text_for_embedding(
+            "\n".join(
+                part
+                for part in (
+                    question_prefix,
+                    f"{answer_prefix}{answer}" if answer else "",
+                )
+                if part
+            )
+        )
+
+        if full_text and len(full_text) <= qa_chunk_size:
+            return [
+                DocumentChunk(
+                    id=f"{document.id}:qa:0",
+                    text=full_text,
+                    metadata=_enrich_metadata(
+                        document,
+                        chunk_index=0,
+                        is_faq=True,
+                        doc_kind="qa",
+                        question=question,
+                    ),
+                )
+            ]
+
+        if answer:
+            answer_only_size = max(
+                qa_chunk_size - len(question_prefix) - len(answer_prefix) - 1, 220
+            )
+            effective_overlap = min(qa_overlap, max(answer_only_size - 1, 0))
+            step = max(answer_only_size - effective_overlap, 1)
+            chunks: list[DocumentChunk] = []
+            for start in range(0, max(len(answer), 1), step):
+                end = min(len(answer), start + answer_only_size)
+                answer_slice = normalize_text_for_embedding(answer[start:end])
+                if not answer_slice:
+                    continue
+                text_parts = (
+                    [question_prefix, f"{answer_prefix}{answer_slice}"]
+                    if question_prefix
+                    else [f"{answer_prefix}{answer_slice}"]
+                )
+                chunk_text = "\n".join(text_parts)
+                chunks.append(
+                    DocumentChunk(
+                        id=f"{document.id}:qa:{start}",
+                        text=chunk_text,
+                        metadata=_enrich_metadata(
+                            document,
+                            chunk_index=len(chunks),
+                            is_faq=True,
+                            doc_kind="qa",
+                            question=question,
+                        ),
+                    )
+                )
+                if end == len(answer):
+                    break
+            if chunks:
+                return chunks
+
+    if doc_type in {"rate", "index"}:
+        normalized = normalize_text_for_embedding(document.text)
+        if normalized and len(normalized) <= SEMANTIC_DOC_HARD_CAP:
+            return [
+                DocumentChunk(
+                    id=f"{document.id}:0",
+                    text=normalized,
+                    metadata=_enrich_metadata(
+                        document,
+                        chunk_index=0,
+                        is_faq=False,
+                        doc_kind=doc_type,
+                    ),
+                )
+            ]
+
+    generic_chunks = chunk_document(document, chunk_size=chunk_size, overlap=overlap)
+    updated: list[DocumentChunk] = []
+    for idx, chunk in enumerate(generic_chunks):
+        updated.append(
+            DocumentChunk(
+                id=chunk.id,
+                text=normalize_text_for_embedding(chunk.text),
+                metadata=_enrich_metadata(
+                    document,
+                    chunk_index=idx,
+                    is_faq=False,
+                    doc_kind=doc_type or "text",
+                ),
+            )
+        )
+    return updated
 
 
 def chunk_document(
