@@ -8,6 +8,27 @@ import type {
 
 const API_BASE = "/api";
 
+async function readErrorMessage(response: Response): Promise<string> {
+  if (response.status === 413) {
+    return "File too large for server upload limit";
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) {
+        return payload.detail;
+      }
+    } catch {
+      return `Request failed with status ${response.status}`;
+    }
+  }
+
+  const text = await response.text();
+  return text || `Request failed with status ${response.status}`;
+}
+
 export async function sendChat(
   message: string,
   history: MessageHistoryItem[] = [],
@@ -119,7 +140,7 @@ export async function uploadDocument(
   });
 
   if (!response.ok) {
-    const error = await response.text();
+    const error = await readErrorMessage(response);
     throw new Error(`Failed to upload document: ${error}`);
   }
 
