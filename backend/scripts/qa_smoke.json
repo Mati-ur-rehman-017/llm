@@ -1,0 +1,13 @@
+{
+  "categories": [
+    {
+      "category": "Smoke",
+      "questions": [
+        {
+          "question": "Is there a limit on the amount I can transfer through the mobile banking app?",
+          "answer": "Yes, 1 million is the current daily limit. Transfer limits vary based on your account type. Check the Limits section in the app for specifics on daily transfer limits."
+        }
+      ]
+    }
+  ]
+}
